@@ -2,26 +2,81 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import BotaoCopiar from "@/components/BotaoCopiar";
+import PainelNFe from "@/components/PainelNFe";
 import Toast from "@/components/Toast";
 import {
   analisarBoleto,
   formatarLinha,
   type DadosBoleto,
 } from "@/utils/boleto";
+import type { DadosNFe } from "@/utils/nfe";
 
 // Linha de exemplo com todos os DVs válidos (campo 4 = 2, módulo 11).
 const EXEMPLO = "34191.79001 01043.510047 91020.150008 2 89110000012345";
 const CHAVE_HISTORICO = "leitor-boletos:historico";
 
+type Aba = "boleto" | "nfe";
 type ChaveCopia = "banco" | "valor" | "vencimento" | "codigo";
+type VarianteToast = "sucesso" | "erro";
 
-interface ItemHistorico {
+/** Entrada de histórico da aba Boleto. */
+interface ItemHistoricoBoleto {
+  tipo: "boleto";
+  id: string;
   linha: string;
   bancoCodigo: string;
   bancoNome: string;
   valorFormatado: string;
   vencimento: string;
   timestamp: number;
+}
+
+/** Entrada de histórico da aba NF-e (guarda os dados para reabrir). */
+interface ItemHistoricoNFe {
+  tipo: "nfe";
+  id: string;
+  numero: string;
+  emitente: string;
+  valorFormatado: string;
+  dados: DadosNFe;
+  timestamp: number;
+}
+
+type ItemHistorico = ItemHistoricoBoleto | ItemHistoricoNFe;
+
+/** Migra itens antigos (só boleto, sem o campo `tipo`) para o formato unificado. */
+function normalizarItemHistorico(bruto: unknown): ItemHistorico | null {
+  if (!bruto || typeof bruto !== "object") return null;
+  const item = bruto as Record<string, unknown>;
+  const timestamp =
+    typeof item.timestamp === "number" ? item.timestamp : Date.now();
+
+  if (item.tipo === "nfe") {
+    if (typeof item.numero !== "string" || !item.dados) return null;
+    return {
+      tipo: "nfe",
+      id: typeof item.id === "string" ? item.id : item.numero,
+      numero: item.numero,
+      emitente: typeof item.emitente === "string" ? item.emitente : "",
+      valorFormatado:
+        typeof item.valorFormatado === "string" ? item.valorFormatado : "",
+      dados: item.dados as DadosNFe,
+      timestamp,
+    };
+  }
+
+  if (typeof item.linha !== "string" || item.linha.length !== 47) return null;
+  return {
+    tipo: "boleto",
+    id: item.linha,
+    linha: item.linha,
+    bancoCodigo: String(item.bancoCodigo ?? ""),
+    bancoNome: String(item.bancoNome ?? ""),
+    valorFormatado: String(item.valorFormatado ?? ""),
+    vencimento: String(item.vencimento ?? ""),
+    timestamp,
+  };
 }
 
 function formatarMomento(timestamp: number): string {
@@ -33,64 +88,16 @@ function formatarMomento(timestamp: number): string {
   });
 }
 
-function BotaoCopiar({
-  ativo,
-  onClick,
-  rotulo,
-}: {
-  ativo: boolean;
-  onClick: () => void;
-  rotulo: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={rotulo}
-      title={rotulo}
-      className={`rounded-lg border p-1.5 transition focus:outline-none focus:ring-2 focus:ring-white/30 ${
-        ativo
-          ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-300"
-          : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
-      }`}
-    >
-      {ativo ? (
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-3.5 w-3.5"
-          aria-hidden
-        >
-          <path d="m5 13 4 4L19 7" />
-        </svg>
-      ) : (
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-3.5 w-3.5"
-          aria-hidden
-        >
-          <rect x="9" y="9" width="12" height="12" rx="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
-      )}
-    </button>
-  );
-}
-
 export default function Home() {
+  const [aba, setAba] = useState<Aba>("boleto");
   const [linha, setLinha] = useState("");
   const [resultado, setResultado] = useState<DadosBoleto | null>(null);
+  const [nfe, setNfe] = useState<DadosNFe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    mensagem: string;
+    variante: VarianteToast;
+  } | null>(null);
   const [copiadoEm, setCopiadoEm] = useState<ChaveCopia | null>(null);
   const [historico, setHistorico] = useState<ItemHistorico[]>([]);
   const timerToast = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,11 +109,10 @@ export default function Home() {
     try {
       const bruto = window.localStorage.getItem(CHAVE_HISTORICO);
       if (bruto) {
-        const lista = JSON.parse(bruto) as ItemHistorico[];
-        const valida = lista.filter(
-          (item) =>
-            item && typeof item.linha === "string" && item.linha.length === 47
-        );
+        const lista = JSON.parse(bruto) as unknown[];
+        const valida = lista
+          .map(normalizarItemHistorico)
+          .filter((item): item is ItemHistorico => item !== null);
         setHistorico(valida.slice(0, 5));
       }
     } catch {
@@ -121,25 +127,17 @@ export default function Home() {
     setCopiadoEm(null);
   }
 
-  function mostrarToast(mensagem: string) {
+  function mostrarToast(mensagem: string, variante: VarianteToast = "sucesso") {
     if (timerToast.current) clearTimeout(timerToast.current);
-    setToast(mensagem);
+    setToast({ mensagem, variante });
     timerToast.current = setTimeout(() => setToast(null), 2000);
   }
 
-  function gravarHistorico(dados: DadosBoleto) {
+  function gravarHistorico(novo: ItemHistorico) {
     setHistorico((atual) => {
-      const novo: ItemHistorico = {
-        linha: dados.linha,
-        bancoCodigo: dados.banco.codigo,
-        bancoNome: dados.banco.nome,
-        valorFormatado: dados.valorFormatado,
-        vencimento: dados.dataVencimentoFormatada,
-        timestamp: Date.now(),
-      };
       const lista = [
         novo,
-        ...atual.filter((item) => item.linha !== novo.linha),
+        ...atual.filter((item) => item.id !== novo.id),
       ].slice(0, 5);
       try {
         window.localStorage.setItem(CHAVE_HISTORICO, JSON.stringify(lista));
@@ -156,11 +154,38 @@ export default function Home() {
     if (resposta.ok) {
       setErro(null);
       setResultado(resposta.dados);
-      gravarHistorico(resposta.dados);
+      gravarHistorico({
+        tipo: "boleto",
+        id: resposta.dados.linha,
+        linha: resposta.dados.linha,
+        bancoCodigo: resposta.dados.banco.codigo,
+        bancoNome: resposta.dados.banco.nome,
+        valorFormatado: resposta.dados.valorFormatado,
+        vencimento: resposta.dados.dataVencimentoFormatada,
+        timestamp: Date.now(),
+      });
     } else {
       setResultado(null);
       setErro(resposta.erro);
     }
+  }
+
+  function aoLerNFe(dados: DadosNFe) {
+    setNfe(dados);
+    gravarHistorico({
+      tipo: "nfe",
+      id: dados.chave || dados.numero,
+      numero: dados.numero,
+      emitente: dados.razaoSocial || dados.cnpjFormatado,
+      valorFormatado: dados.valorTotalFormatado,
+      dados,
+      timestamp: Date.now(),
+    });
+  }
+
+  function trocarAba(nova: Aba) {
+    setAba(nova);
+    setErro(null);
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -170,6 +195,13 @@ export default function Home() {
   }
 
   function reaplicar(item: ItemHistorico) {
+    if (item.tipo === "nfe") {
+      setAba("nfe");
+      setNfe(item.dados);
+      setErro(null);
+      return;
+    }
+    setAba("boleto");
     setLinha(formatarLinha(item.linha));
     setErro(null);
     analisar(item.linha);
@@ -265,7 +297,7 @@ export default function Home() {
             </span>
           </div>
           <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-3 py-1 text-xs font-medium text-blue-300">
-            Fase 3
+            Fase 4
           </span>
         </div>
       </header>
@@ -275,84 +307,72 @@ export default function Home() {
         <section className="animate-fade-in-up text-center">
           <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-slate-300 backdrop-blur">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-            Análise inteligente de boletos
+            {aba === "boleto"
+              ? "Análise inteligente de boletos"
+              : "Leitura de XML de NF-e"}
           </span>
 
           <h1 className="text-balance text-4xl font-bold leading-tight tracking-tight text-white sm:text-6xl">
-            Leitor de Boletos{" "}
-            <span className="text-gradient">Inteligente</span>
+            {aba === "boleto" ? (
+              <>
+                Leitor de Boletos{" "}
+                <span className="text-gradient">Inteligente</span>
+              </>
+            ) : (
+              <>
+                Leitor de NF-e{" "}
+                <span className="text-gradient">Inteligente</span>
+              </>
+            )}
           </h1>
 
           <p className="text-balance mx-auto mt-5 max-w-2xl text-base leading-relaxed text-slate-400 sm:text-lg">
-            Cole a linha digitável do seu boleto e extraia as informações
-            importantes em segundos. Rápido, seguro e sem complicações.
+            {aba === "boleto"
+              ? "Cole a linha digitável do seu boleto e extraia as informações importantes em segundos. Rápido, seguro e sem complicações."
+              : "Envie o XML da sua NF-e e extraia emitente, valores e itens em segundos. Tudo no seu navegador."}
           </p>
         </section>
-        {/* Card de análise */}
-        <section className="mt-12 animate-fade-in-up [animation-delay:0.15s]">
-          <div className="mx-auto max-w-3xl rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-blue-950/50 backdrop-blur-xl sm:p-8">
-            <form onSubmit={handleSubmit}>
-              <label
-                htmlFor="linha-digitavel"
-                className="mb-2 block text-sm font-medium text-slate-300"
-              >
-                Linha digitável do boleto
-              </label>
 
-              <textarea
-                id="linha-digitavel"
-                value={linha}
-                onChange={(e) => aoMudarLinha(e.target.value)}
-                rows={3}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder={EXEMPLO}
-                className="w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-5 py-4 font-mono text-base tracking-wide text-white placeholder:text-slate-600 focus:border-blue-500/60 focus:outline-none focus:ring-2 focus:ring-blue-500/30 sm:text-lg"
-              />
-
-              <div className="mt-2 flex items-start justify-between gap-4">
-                <p className="text-xs text-slate-500">
-                  Cole a sequência com 47 dígitos, como{" "}
-                  <span className="font-mono text-slate-400">
-                    34191.79001 01043.510047...
-                  </span>
-                </p>
-                {!vazio && (
-                  <button
-                    type="button"
-                    onClick={() => aoMudarLinha("")}
-                    className="shrink-0 text-xs text-slate-500 transition hover:text-slate-300"
-                  >
-                    Limpar
-                  </button>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={vazio}
-                className="group mt-6 flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-blue-900/40 transition hover:from-blue-500 hover:to-indigo-500 hover:shadow-blue-800/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-5 w-5 transition group-hover:scale-110"
-                  aria-hidden
-                >
-                  <circle cx="11" cy="11" r="7" />
-                  <path d="m20 20-3.5-3.5" />
-                </svg>
-                Analisar Boleto
-              </button>
-
-              {erro && (
-                <div
-                  role="alert"
-                  className="mt-6 flex animate-fade-in-up items-start gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4"
+        {/* Abas Boleto / NF-e */}
+        <section
+          className="mt-10 flex animate-fade-in-up justify-center [animation-delay:0.1s]"
+          aria-label="Tipo de documento"
+        >
+          <div
+            role="tablist"
+            className="flex rounded-2xl border border-white/10 bg-white/5 p-1.5 shadow-xl shadow-black/30 backdrop-blur-xl"
+          >
+            {(
+              [
+                {
+                  id: "boleto" as Aba,
+                  rotulo: "BOLETO",
+                  icone: (
+                    <path d="M3 5v14M7 5v14M11 5v14M15 5v10M19 5v14" />
+                  ),
+                },
+                {
+                  id: "nfe" as Aba,
+                  rotulo: "NF-e",
+                  icone: (
+                    <path d="M7 3h8l4 4v14H7zM15 3v4h4" />
+                  ),
+                },
+              ] as const
+            ).map((item) => {
+              const ativa = aba === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={ativa}
+                  onClick={() => trocarAba(item.id)}
+                  className={`flex items-center gap-2 rounded-xl px-6 py-2.5 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-blue-400/60 ${
+                    ativa
+                      ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-900/40"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -361,45 +381,131 @@ export default function Home() {
                     strokeWidth="2"
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    className="mt-0.5 h-5 w-5 shrink-0 text-red-400"
+                    className="h-4 w-4"
                     aria-hidden
                   >
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M12 8v4M12 16h.01" />
+                    {item.icone}
                   </svg>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-red-200">
-                      Não foi possível analisar
-                    </p>
-                    <p className="mt-0.5 text-sm text-red-300/90">{erro}</p>
-                  </div>
+                  {item.rotulo}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        {/* Card de análise */}
+        <section className="mt-12 animate-fade-in-up [animation-delay:0.15s]">
+          <div className="mx-auto max-w-3xl rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-blue-950/50 backdrop-blur-xl sm:p-8">
+            {aba === "boleto" ? (
+              <>
+                <form onSubmit={handleSubmit}>
+                  <label
+                    htmlFor="linha-digitavel"
+                    className="mb-2 block text-sm font-medium text-slate-300"
+                  >
+                    Linha digitável do boleto
+                  </label>
+
+                  <textarea
+                    id="linha-digitavel"
+                    value={linha}
+                    onChange={(e) => aoMudarLinha(e.target.value)}
+                    rows={3}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder={EXEMPLO}
+                    className="w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-5 py-4 font-mono text-base tracking-wide text-white placeholder:text-slate-600 focus:border-blue-500/60 focus:outline-none focus:ring-2 focus:ring-blue-500/30 sm:text-lg"
+                  />
+
+              <div className="mt-2 flex items-start justify-between gap-4">
+                  <p className="text-xs text-slate-500">
+                    Cole a sequência com 47 dígitos, como{" "}
+                    <span className="font-mono text-slate-400">
+                      34191.79001 01043.510047...
+                    </span>
+                  </p>
+                  {!vazio && (
+                    <button
+                      type="button"
+                      onClick={() => aoMudarLinha("")}
+                      className="shrink-0 text-xs text-slate-500 transition hover:text-slate-300"
+                    >
+                      Limpar
+                    </button>
+                  )}
                 </div>
-              )}
 
-              <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-500">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3.5 w-3.5"
-                  aria-hidden
+                <button
+                  type="submit"
+                  disabled={vazio}
+                  className="group mt-6 flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-blue-900/40 transition hover:from-blue-500 hover:to-indigo-500 hover:shadow-blue-800/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
                 >
-                  <rect x="3" y="11" width="18" height="10" rx="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-                Seus dados ficam no seu navegador — nada é enviado.
-              </p>
-            </form>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-5 w-5 transition group-hover:scale-110"
+                    aria-hidden
+                  >
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-3.5-3.5" />
+                  </svg>
+                  Analisar Boleto
+                </button>
 
-            {resultado && (
-              <section
-                aria-live="polite"
-                className="mt-6 animate-fade-in-up border-t border-white/10 pt-6"
-              >
-                <div className="mb-4 flex items-center justify-between gap-3">
+                {erro && (
+                  <div
+                    role="alert"
+                    className="mt-6 flex animate-fade-in-up items-start gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-4"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mt-0.5 h-5 w-5 shrink-0 text-red-400"
+                      aria-hidden
+                    >
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 8v4M12 16h.01" />
+                    </svg>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-red-200">
+                        Não foi possível analisar
+                      </p>
+                      <p className="mt-0.5 text-sm text-red-300/90">{erro}</p>
+                    </div>
+                  </div>
+                )}
+
+                <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-500">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-3.5 w-3.5"
+                    aria-hidden
+                  >
+                    <rect x="3" y="11" width="18" height="10" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                  Seus dados ficam no seu navegador — nada é enviado.
+                </p>
+              </form>
+
+              {resultado && (
+                <section
+                  aria-live="polite"
+                  className="mt-6 animate-fade-in-up border-t border-white/10 pt-6"
+                >
+                  <div className="mb-4 flex items-center justify-between gap-3">
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Resultado da análise
                   </h2>
@@ -587,6 +693,14 @@ export default function Home() {
                 </div>
               </section>
             )}
+          </>
+        ) : (
+          <PainelNFe
+            dados={nfe}
+            onDados={aoLerNFe}
+            mostrarToast={mostrarToast}
+          />
+        )}
 
             {historico.length > 0 && (
               <section className="mt-6 border-t border-white/10 pt-6">
@@ -604,27 +718,41 @@ export default function Home() {
                 </div>
                 <ul className="space-y-2">
                   {historico.map((item) => (
-                    <li key={item.linha}>
+                    <li key={item.id}>
                       <button
                         type="button"
                         onClick={() => reaplicar(item)}
                         className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
                       >
-                        <span className="flex min-w-0 items-center gap-2.5">
-                          <span className="shrink-0 rounded-md border border-sky-400/30 bg-sky-500/15 px-1.5 py-0.5 font-mono text-[11px] text-sky-300">
-                            {item.bancoCodigo}
+                        {item.tipo === "boleto" ? (
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="shrink-0 rounded-md border border-sky-400/30 bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-sky-300">
+                              BOLETO
+                            </span>
+                            <span className="truncate text-sm font-medium text-slate-200">
+                              {item.bancoNome}
+                            </span>
                           </span>
-                          <span className="truncate text-sm font-medium text-slate-200">
-                            {item.bancoNome}
+                        ) : (
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="shrink-0 rounded-md border border-violet-400/30 bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-violet-300">
+                              NF-e
+                            </span>
+                            <span className="truncate text-sm font-medium text-slate-200">
+                              {item.numero}
+                              {item.emitente ? ` · ${item.emitente}` : ""}
+                            </span>
                           </span>
-                        </span>
+                        )}
                         <span className="flex shrink-0 items-center gap-3 text-xs">
                           <span className="font-medium text-emerald-300">
                             {item.valorFormatado}
                           </span>
-                          <span className="hidden text-slate-400 sm:inline">
-                            Venc {item.vencimento}
-                          </span>
+                          {item.tipo === "boleto" && (
+                            <span className="hidden text-slate-400 sm:inline">
+                              Venc {item.vencimento}
+                            </span>
+                          )}
                           <span className="text-slate-500">
                             {formatarMomento(item.timestamp)}
                           </span>
@@ -747,7 +875,13 @@ export default function Home() {
         </div>
       </footer>
 
-      {toast && <Toast key={toast} mensagem={toast} />}
+      {toast && (
+        <Toast
+          key={toast.mensagem}
+          mensagem={toast.mensagem}
+          variante={toast.variante}
+        />
+      )}
     </div>
   );
 }

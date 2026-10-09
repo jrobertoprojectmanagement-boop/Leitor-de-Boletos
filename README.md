@@ -45,7 +45,7 @@ npm run dev
 
 **Roadmap de Produto:**
 - [x] **Fase 1-3:** Leitor de Boletos (linha digitável, validação DV, export TXT, histórico)
-- [ ] **Fase 4:** Aba NF-e - Upload XML, extração de CNPJ, nº, valor, itens + export CSV/XLSX
+- [x] **Fase 4:** Aba NF-e - Upload XML, extração de CNPJ, nº, valor, itens + export CSV/XLSX
 - [ ] **Fase 5:** Lote + OCR - Colar 20 boletos de uma vez e ler PDF/foto do boleto por câmera
 - [ ] **Fase 6:** Geração CNAB 240/400 para remessa bancária
 
