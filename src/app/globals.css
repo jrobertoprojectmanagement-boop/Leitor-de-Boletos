@@ -3,27 +3,57 @@
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
+  --background: 2, 6, 23; /* slate-950 */
+  --foreground: 226, 232, 240; /* slate-200 */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
-  }
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  color: rgb(var(--foreground));
+  background-color: rgb(var(--background) / 1);
+  background-image: radial-gradient(
+      ellipse 90% 55% at 50% -15%,
+      rgba(37, 99, 235, 0.38),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 60% 40% at 100% 60%,
+      rgba(99, 102, 241, 0.14),
+      transparent 70%
+    ),
+    linear-gradient(to bottom, rgb(2 6 23), rgb(2 6 23));
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+::selection {
+  background-color: rgba(59, 130, 246, 0.35);
+  color: #f8fafc;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(2 6 23);
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(30 41 59);
+  border-radius: 9999px;
+  border: 2px solid rgb(2 6 23);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(51 65 85);
+}
+
+@layer components {
+  .text-gradient {
+    @apply bg-gradient-to-r from-sky-300 via-blue-400 to-indigo-400 bg-clip-text text-transparent;
+  }
 }
 
 @layer utilities {
@@ -31,3 +61,4 @@ body {
     text-wrap: balance;
   }
 }
+
